@@ -5,14 +5,101 @@ import Link from 'next/link'
 import { useState } from 'react'
 import pkg from '../package.json'
 
+function hostnameOf(url) {
+	try { return new URL(url).hostname } catch { return url }
+}
+
+function Row({ label, children }) {
+	if (children == null || children === '' || (Array.isArray(children) && children.length === 0)) return null
+	return (
+		<>
+			<dt>{label}</dt>
+			<dd>{children}</dd>
+		</>
+	)
+}
+
+// Everything the API returns for one hit, beyond the one-line summary. Lists
+// carry different extras (OFAC: alias types, sanctions types, wallets; Cuban
+// rosters: role/org/url; OpenSanctions: datasets) — rows render only when
+// the field is present, so no list shows empty labels.
+function EntityDetails({ result }) {
+	const e = result.entity
+	const matched = result.matchedName
+	const primary = e.names?.find((n) => n.isPrimary)?.full
+	const aliases = (e.names ?? []).filter((n) => !n.isPrimary && n.full !== matched?.full)
+	const orgs = e.organizations?.length ? e.organizations : e.org ? [e.org] : []
+	const matchedAs = matched && (!matched.isPrimary || matched.aliasType || matched.script)
+		? [matched.aliasType ?? (matched.isPrimary ? 'Primary name' : 'Alias'), matched.script].filter(Boolean).join(' · ')
+		: null
+	const wallets = e.cryptoAddresses ?? []
+	return (
+		<dl className="details">
+			<Row label="Primary name">{primary !== matched?.full ? primary : null}</Row>
+			<Row label="Matched as">{matchedAs}</Row>
+			<Row label="Aliases">{aliases.length ? <AliasList names={aliases} /> : null}</Row>
+			<Row label="List">{e.source ?? e.list}</Row>
+			<Row label="Type">{e.type}</Row>
+			<Row label="Programs">{joinOrNull(e.programs)}</Row>
+			<Row label="Sanctions">{joinOrNull(e.sanctionsTypes)}</Row>
+			<Row label="Role">{e.role}</Row>
+			<Row label="Organizations">{joinOrNull(orgs)}</Row>
+			<Row label="Datasets">{joinOrNull(e.datasets)}</Row>
+			<Row label="Wallets">{wallets.length ? <WalletList wallets={wallets} /> : null}</Row>
+			<Row label="ID">
+				<code>{e.id}</code>
+				{e.identityId ? <span className="alias-meta"> · identity {e.identityId}</span> : null}
+			</Row>
+			<Row label="Source">
+				{e.url ? <a href={e.url} rel="noopener noreferrer" target="_blank">{hostnameOf(e.url)} ↗</a> : null}
+			</Row>
+		</dl>
+	)
+}
+
+function joinOrNull(list) {
+	return list?.length ? list.join(', ') : null
+}
+
+function AliasList({ names }) {
+	return (
+		<ul className="aliases">
+			{names.map((n) => {
+				const meta = [n.aliasType, n.script].filter(Boolean).join(' · ')
+				return (
+					<li key={`${n.full}|${meta}`}>
+						{n.full}
+						{meta ? <span className="alias-meta"> {meta}</span> : null}
+					</li>
+				)
+			})}
+		</ul>
+	)
+}
+
+function WalletList({ wallets }) {
+	return (
+		<ul className="aliases">
+			{wallets.map((w) => (
+				<li key={`${w.currency}-${w.address}`}>
+					<code>{w.address}</code>
+					<span className="alias-meta"> {w.currency}</span>
+				</li>
+			))}
+		</ul>
+	)
+}
+
 function Screener({ param, label, mode, placeholder, hint, examples }) {
 	const [value, setValue] = useState('')
 	const [state, setState] = useState({ status: 'idle' })
+	const [expanded, setExpanded] = useState(null)
 
 	async function run(query) {
 		const q = query.trim()
 		if (!q) return
 		setState({ status: 'loading' })
+		setExpanded(null)
 		try {
 			const res = await fetch(`/api?${param}=${encodeURIComponent(q)}`)
 			if (!res.ok) {
@@ -80,20 +167,33 @@ function Screener({ param, label, mode, placeholder, hint, examples }) {
 							<strong>{state.data.total} match{state.data.total > 1 ? 'es' : ''}</strong> found
 							<span className="took">{state.data.tookMs} ms</span>
 						</div>
-						{state.data.results.slice(0, 5).map((r) => (
-							<div className="entity" key={r.currency ? `${r.entity.id}-${r.currency}` : r.entity.id}>
-								<div className="entity-name">
-									<span className="entity-text">{r.matchedName?.full ?? r.matchedAddress}</span>
-									<span className="score" title="Match score">{r.score}</span>
+						{state.data.results.slice(0, 5).map((r) => {
+							const key = r.currency ? `${r.entity.id}-${r.currency}` : r.entity.id
+							const isOpen = expanded === key
+							return (
+								<div className={`entity${isOpen ? ' open' : ''}`} key={key}>
+									<button
+										type="button"
+										className="entity-toggle"
+										aria-expanded={isOpen}
+										onClick={() => setExpanded(isOpen ? null : key)}
+									>
+										<span className="entity-name">
+											<span className="entity-text">{r.matchedName?.full ?? r.matchedAddress}</span>
+											<span className="score" title="Match score">{r.score}</span>
+										</span>
+										<span className="entity-meta">
+											{r.entity.source ?? 'OFAC'} · {r.entity.type}
+											{r.currency ? ` · ${r.currency}` : ''}
+											{r.entity.programs?.length ? ` · ${r.entity.programs.join(', ')}` : ''}
+											{r.entity.role ? ` · ${r.entity.role}` : ''}
+											<span className="caret" aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
+										</span>
+									</button>
+									{isOpen && <EntityDetails result={r} />}
 								</div>
-								<div className="entity-meta">
-									{r.entity.source ?? 'OFAC'} · {r.entity.type}
-									{r.currency ? ` · ${r.currency}` : ''}
-									{r.entity.programs?.length ? ` · ${r.entity.programs.join(', ')}` : ''}
-									{r.entity.role ? ` · ${r.entity.role}` : ''}
-								</div>
-							</div>
-						))}
+							)
+						})}
 						{state.data.total > 5 && <div className="more">+{state.data.total - 5} more matches not shown</div>}
 					</div>
 				)
@@ -239,7 +339,42 @@ export default function Home() {
                 .result.error { background: #fffbeb; border: 1px solid #fcd34d; color: #92400e; }
                 .result.match { background: #fef2f2; border: 1px solid #fca5a5; color: #7f1d1d; }
                 .match-head { padding-bottom: 8px; }
-                .entity { padding: 9px 0; border-top: 1px solid #fecaca; }
+                .entity { border-top: 1px solid #fecaca; }
+                .entity-toggle {
+                    display: block;
+                    width: 100%;
+                    padding: 9px 4px;
+                    margin: 0 -4px;
+                    border: 0;
+                    border-radius: 6px;
+                    background: transparent;
+                    color: inherit;
+                    font: inherit;
+                    text-align: left;
+                    cursor: pointer;
+                    transition: background .15s;
+                }
+                .entity-toggle:hover, .entity-toggle:focus-visible { background: #fee2e2; outline: none; }
+                .caret { float: right; font-size: 11px; opacity: 0.7; margin-left: 8px; }
+                .details {
+                    display: grid;
+                    grid-template-columns: max-content 1fr;
+                    column-gap: 14px;
+                    row-gap: 4px;
+                    margin: 0 0 10px;
+                    padding: 10px 12px;
+                    background: #fff5f5;
+                    border: 1px solid #fecaca;
+                    border-radius: 8px;
+                    font-size: 12.5px;
+                }
+                .details dt { color: #b91c1c; font-weight: 600; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; padding-top: 2px; }
+                .details dd { margin: 0; color: #7f1d1d; word-break: break-word; min-width: 0; }
+                .details code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; word-break: break-all; }
+                .details a { color: #991b1b; border-bottom-color: #fca5a5; }
+                .aliases { list-style: none; margin: 0; padding: 0; }
+                .aliases li { padding: 1px 0; }
+                .alias-meta { color: #b91c1c; font-size: 11px; opacity: 0.85; }
                 .entity-name { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
                 .entity-text { font-weight: 600; color: #991b1b; word-break: break-all; }
                 .score {
@@ -252,7 +387,7 @@ export default function Home() {
                     border-radius: 999px;
                     padding: 2px 9px;
                 }
-                .entity-meta { font-size: 12.5px; color: #b91c1c; margin-top: 2px; }
+                .entity-meta { display: block; font-size: 12.5px; color: #b91c1c; margin-top: 2px; }
                 .more { font-size: 12.5px; margin-top: 8px; color: #b91c1c; font-style: italic; }
                 footer {
                     margin-top: 26px;
@@ -284,6 +419,9 @@ export default function Home() {
                     main { padding: 32px 20px 24px; }
                     .get { display: none; }
                     .row input { padding-left: 14px; }
+                    .details { grid-template-columns: 1fr; row-gap: 2px; }
+                    .details dt { margin-top: 6px; }
+                    .details dt:first-child { margin-top: 0; }
                 }
             `}</style>
 			<main>
