@@ -6,7 +6,8 @@ import { normalize, score } from '../lib/scoring.js'
 describe('normalize', () => {
 	it('keeps letters of non-Latin scripts', () => {
 		assert.equal(normalize('ЛУКАШЕНКО, Александр Григорьевич'), 'лукашенко александр григорьевич')
-		assert.equal(normalize('‫بانک مرکزی جمهوری اسلامی ایران‬'), 'بانک مرکزی جمهوری اسلامی ایران')
+		// OFAC wraps right-to-left names in bidi controls (RLE … PDF); written as escapes so they stay visible
+		assert.equal(normalize('\u202Bبانک مرکزی جمهوری اسلامی ایران\u202C'), 'بانک مرکزی جمهوری اسلامی ایران')
 	})
 
 	it('keeps the whole name when a Latin prefix precedes Cyrillic', () => {
